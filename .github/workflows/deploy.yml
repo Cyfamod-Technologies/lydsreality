@@ -1,0 +1,745 @@
+name: Deploy Docker Compose Through Dokploy
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      compose_file:
+        description: Compose file path relative to repository root
+        required: false
+        default: docker-compose.yml
+        type: string
+      compose_id:
+        description: Dokploy Compose ID
+        required: false
+        type: string
+      healthcheck_url:
+        description: Optional public healthcheck URL
+        required: false
+        type: string
+
+  workflow_call:
+    inputs:
+      compose_file:
+        required: false
+        default: docker-compose.yml
+        type: string
+      compose_id:
+        required: false
+        type: string
+      healthcheck_url:
+        required: false
+        type: string
+    secrets:
+      SSH_HOST:
+        required: true
+      SSH_USER:
+        required: true
+      SSH_PASSWORD:
+        required: true
+      DOKPLOY_API_KEY:
+        required: true
+
+concurrency:
+  group: dokploy-compose-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMPOSE_FILE: ${{ inputs.compose_file || vars.COMPOSE_FILE || 'docker-compose.yml' }}
+  DOKPLOY_COMPOSE_ID: ${{ inputs.compose_id || vars.DOKPLOY_COMPOSE_ID }}
+  DOKPLOY_COMPOSE_NAME: ${{ vars.DOKPLOY_COMPOSE_NAME || github.event.repository.name }}
+  SERVER_SOURCE_DIR: ${{ vars.SERVER_SOURCE_DIR }}
+  SERVER_ENV_FILE: ${{ vars.SERVER_ENV_FILE }}
+  DOKPLOY_URL: http://127.0.0.1:5000
+  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+  TARGET_PLATFORM: ${{ vars.TARGET_PLATFORM || 'linux/amd64' }}
+  HEALTHCHECK_URL: ${{ inputs.healthcheck_url || vars.HEALTHCHECK_URL }}
+
+jobs:
+  validate:
+    name: Validate Compose Project
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${DOKPLOY_COMPOSE_ID:?Set DOKPLOY_COMPOSE_ID repository variable}"
+          : "${SERVER_SOURCE_DIR:?Set SERVER_SOURCE_DIR repository variable}"
+          : "${SERVER_ENV_FILE:?Set SERVER_ENV_FILE repository variable}"
+
+          test -f "$COMPOSE_FILE" || {
+            echo "Compose file not found: $COMPOSE_FILE"
+            exit 1
+          }
+
+          [[ "$COMPOSE_FILE" != /* ]] || exit 1
+          [[ ! "$COMPOSE_FILE" =~ (^|/)\.\.(/|$) ]] || exit 1
+          [[ "$DOKPLOY_COMPOSE_ID" =~ ^[A-Za-z0-9_-]+$ ]] || exit 1
+          [[ "$SERVER_SOURCE_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
+          [[ "$SERVER_ENV_FILE" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || exit 1
+
+          docker compose \
+            --file "$COMPOSE_FILE" \
+            config \
+            --no-interpolate \
+            --quiet
+
+          echo "Compose configuration is valid."
+
+  deploy:
+    name: Build And Deploy Through Dokploy
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate secrets
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?SSH_HOST secret is missing}"
+          : "${SSH_USER:?SSH_USER secret is missing}"
+          : "${SSH_PASSWORD:?SSH_PASSWORD secret is missing}"
+          : "${DOKPLOY_API_KEY:?DOKPLOY_API_KEY secret is missing}"
+
+      - name: Prepare release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE_TAG="main-${SHORT_SHA}"
+
+          REPO_SLUG=$(printf '%s' "$GITHUB_REPOSITORY" | \
+            tr '[:upper:]' '[:lower:]' | \
+            sed 's#[^a-z0-9._/-]#-#g; s#/#-#g')
+
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "REPO_SLUG=$REPO_SLUG" >> "$GITHUB_ENV"
+          echo "BUILD_COMPOSE=$RUNNER_TEMP/docker-compose.build.yml" >> "$GITHUB_ENV"
+          echo "DEPLOY_COMPOSE=$RUNNER_TEMP/docker-compose.dokploy.yml" >> "$GITHUB_ENV"
+          echo "BUILD_SERVICES=$RUNNER_TEMP/build-services.txt" >> "$GITHUB_ENV"
+          echo "IMAGES_FILE=$RUNNER_TEMP/images.txt" >> "$GITHUB_ENV"
+          echo "SOURCE_ARCHIVE=$RUNNER_TEMP/source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate build and image-only Compose files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet PyYAML
+
+          python - \
+            "$COMPOSE_FILE" \
+            "$BUILD_COMPOSE" \
+            "$DEPLOY_COMPOSE" \
+            "$BUILD_SERVICES" \
+            "$IMAGES_FILE" \
+            "$SERVER_SOURCE_DIR" \
+            "$REPO_SLUG" \
+            "$IMAGE_TAG" \
+            "$TARGET_PLATFORM" <<'PY'
+          import copy
+          import os
+          import re
+          import sys
+          import yaml
+
+          (source, build_out, deploy_out, services_out, images_out,
+           server_source, repo_slug, image_tag, target_platform) = sys.argv[1:]
+
+          with open(source, "r", encoding="utf-8") as f:
+              compose = yaml.safe_load(f)
+
+          if not isinstance(compose, dict) or not isinstance(compose.get("services"), dict):
+              raise SystemExit("Compose file has no services mapping")
+
+          build_compose = copy.deepcopy(compose)
+          deploy_compose = copy.deepcopy(compose)
+          built_services = []
+          images = []
+
+          def safe(value):
+              value = re.sub(r"[^a-z0-9_.-]+", "-", value.lower()).strip("._-")
+              return value or "service"
+
+          def absolute_bind(source):
+              if isinstance(source, str) and (source.startswith("./") or source.startswith("../")):
+                  return os.path.normpath(os.path.join(server_source, source))
+              return source
+
+          def transform_volume(value):
+              if isinstance(value, str):
+                  parts = value.split(":", 2)
+                  if len(parts) >= 2:
+                      parts[0] = absolute_bind(parts[0])
+                  return ":".join(parts)
+
+              if isinstance(value, dict):
+                  item = copy.deepcopy(value)
+                  if item.get("type") == "bind":
+                      item["source"] = absolute_bind(item.get("source"))
+                  return item
+
+              return value
+
+          for name, service in build_compose["services"].items():
+              if not isinstance(service, dict) or "build" not in service:
+                  continue
+
+              image = f"dokploy-local/{repo_slug}-{safe(name)}:{image_tag}"
+              service["image"] = image
+              service["platform"] = target_platform
+              built_services.append(name)
+              images.append(image)
+
+          for name, service in deploy_compose["services"].items():
+              if not isinstance(service, dict):
+                  continue
+
+              if name in built_services:
+                  image = f"dokploy-local/{repo_slug}-{safe(name)}:{image_tag}"
+                  service.pop("build", None)
+                  service["image"] = image
+                  service["pull_policy"] = "never"
+                  service["platform"] = target_platform
+
+              if isinstance(service.get("env_file"), str):
+                  service["env_file"] = ".env"
+              elif isinstance(service.get("env_file"), list):
+                  service["env_file"] = [".env"]
+
+              if isinstance(service.get("volumes"), list):
+                  service["volumes"] = [transform_volume(v) for v in service["volumes"]]
+
+          remaining = [
+              name for name, service in deploy_compose["services"].items()
+              if isinstance(service, dict) and "build" in service
+          ]
+          if remaining:
+              raise SystemExit("Build definitions remain: " + ", ".join(remaining))
+
+          with open(build_out, "w", encoding="utf-8") as f:
+              yaml.safe_dump(build_compose, f, sort_keys=False)
+
+          with open(deploy_out, "w", encoding="utf-8") as f:
+              yaml.safe_dump(deploy_compose, f, sort_keys=False)
+
+          with open(services_out, "w", encoding="utf-8") as f:
+              f.write("\n".join(built_services))
+              if built_services:
+                  f.write("\n")
+
+          with open(images_out, "w", encoding="utf-8") as f:
+              f.write("\n".join(images))
+              if images:
+                  f.write("\n")
+
+          print("Build services:", built_services or "none")
+          print("Images:", images or "none")
+          PY
+
+          docker compose \
+            --file "$DEPLOY_COMPOSE" \
+            config \
+            --no-interpolate \
+            --quiet
+
+      - name: Build Docker images in GitHub Actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t SERVICES < "$BUILD_SERVICES"
+
+          if [ "${#SERVICES[@]}" -eq 0 ]; then
+            echo "No build: services found."
+            exit 0
+          fi
+
+          docker compose \
+            --file "$BUILD_COMPOSE" \
+            build \
+            --pull \
+            "${SERVICES[@]}"
+
+      - name: Verify built images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t IMAGES < "$IMAGES_FILE"
+
+          for image in "${IMAGES[@]}"; do
+            docker image inspect "$image" >/dev/null
+            echo "Verified: $image"
+          done
+
+      - name: Package source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=.env \
+            --exclude=node_modules \
+            --exclude=.venv \
+            --exclude=venv \
+            --exclude=__pycache__ \
+            --exclude='*.pyc' \
+            -czf "$SOURCE_ARCHIVE" .
+          test -s "$SOURCE_ARCHIVE"
+
+      - name: Install and configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes openssh-client sshpass
+
+          install -d -m 700 "$HOME/.ssh"
+          ssh-keyscan \
+            -T 15 \
+            -p "$SSH_PORT" \
+            -H "$SSH_HOST" \
+            > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Transfer prebuilt images to Dokploy server
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mapfile -t IMAGES < "$IMAGES_FILE"
+
+          if [ "${#IMAGES[@]}" -eq 0 ]; then
+            echo "No local images to transfer."
+            exit 0
+          fi
+
+          docker save "${IMAGES[@]}" | \
+            gzip -1 | \
+            sshpass -e ssh \
+              -p "$SSH_PORT" \
+              -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=20 \
+              "$SSH_USER@$SSH_HOST" \
+              'gunzip | docker load'
+
+      - name: Upload source and transformed Compose
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          REMOTE_SOURCE="/tmp/dokploy-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
+          REMOTE_COMPOSE="/tmp/dokploy-compose-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yml"
+
+          echo "REMOTE_SOURCE=$REMOTE_SOURCE" >> "$GITHUB_ENV"
+          echo "REMOTE_COMPOSE=$REMOTE_COMPOSE" >> "$GITHUB_ENV"
+
+          sshpass -e scp \
+            -P "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes \
+            "$SOURCE_ARCHIVE" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_SOURCE"
+
+          sshpass -e scp \
+            -P "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_COMPOSE" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_COMPOSE"
+
+      - name: Update and deploy through Dokploy API
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          API_KEY_B64=$(printf '%s' "$DOKPLOY_API_KEY" | base64 | tr -d '\n')
+          echo "::add-mask::$API_KEY_B64"
+
+          sshpass -e ssh \
+            -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=20 \
+            "$SSH_USER@$SSH_HOST" \
+            "API_KEY_B64='$API_KEY_B64' \
+             DOKPLOY_COMPOSE_ID='$DOKPLOY_COMPOSE_ID' \
+             DOKPLOY_COMPOSE_NAME='$DOKPLOY_COMPOSE_NAME' \
+             DOKPLOY_URL='$DOKPLOY_URL' \
+             SERVER_SOURCE_DIR='$SERVER_SOURCE_DIR' \
+             SERVER_ENV_FILE='$SERVER_ENV_FILE' \
+             REMOTE_SOURCE='$REMOTE_SOURCE' \
+             REMOTE_COMPOSE='$REMOTE_COMPOSE' \
+             bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+
+          DOKPLOY_API_KEY=$(printf '%s' "$API_KEY_B64" | base64 --decode)
+          unset API_KEY_B64
+
+          NEW_SOURCE="${SERVER_SOURCE_DIR}.new"
+          OLD_SOURCE="${SERVER_SOURCE_DIR}.previous"
+          TMP_DIR=$(mktemp -d)
+
+          cleanup() {
+            rm -f "$REMOTE_SOURCE" "$REMOTE_COMPOSE"
+            rm -rf "$TMP_DIR"
+          }
+          trap cleanup EXIT
+
+          privileged() {
+            if [ "$(id -u)" -eq 0 ]; then
+              "$@"
+            elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+              sudo "$@"
+            else
+              echo "Root or passwordless sudo is required on the Dokploy server."
+              return 1
+            fi
+          }
+
+          api_get() {
+            local endpoint="$1"
+            local output="$2"
+            shift 2
+
+            local code
+            code=$(curl \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 180 \
+              --output "$output" \
+              --write-out '%{http_code}' \
+              --get \
+              "${DOKPLOY_URL}/api/${endpoint}" \
+              --header "x-api-key: ${DOKPLOY_API_KEY}" \
+              "$@")
+
+            [[ "$code" =~ ^2[0-9][0-9]$ ]] || {
+              echo "Dokploy GET failed: $endpoint ($code)"
+              [ ! -s "$output" ] || cat "$output"
+              return 1
+            }
+          }
+
+          api_post() {
+            local endpoint="$1"
+            local payload="$2"
+            local output="$3"
+
+            local code
+            code=$(curl \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 240 \
+              --output "$output" \
+              --write-out '%{http_code}' \
+              --request POST \
+              "${DOKPLOY_URL}/api/${endpoint}" \
+              --header "x-api-key: ${DOKPLOY_API_KEY}" \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$payload")
+
+            [[ "$code" =~ ^2[0-9][0-9]$ ]] || {
+              echo "Dokploy POST failed: $endpoint ($code)"
+              [ ! -s "$output" ] || cat "$output"
+              return 1
+            }
+          }
+
+          test -s "$REMOTE_SOURCE"
+          test -s "$REMOTE_COMPOSE"
+          test -s "$SERVER_ENV_FILE"
+
+          echo "Synchronizing source to $SERVER_SOURCE_DIR"
+          privileged rm -rf "$NEW_SOURCE"
+          privileged mkdir -p "$NEW_SOURCE"
+          privileged tar -xzf "$REMOTE_SOURCE" -C "$NEW_SOURCE"
+          privileged cp "$SERVER_ENV_FILE" "$NEW_SOURCE/.env"
+          privileged chmod 600 "$NEW_SOURCE/.env"
+
+          privileged rm -rf "$OLD_SOURCE"
+          if privileged test -d "$SERVER_SOURCE_DIR"; then
+            privileged mv "$SERVER_SOURCE_DIR" "$OLD_SOURCE"
+          fi
+          privileged mv "$NEW_SOURCE" "$SERVER_SOURCE_DIR"
+
+          UPDATE_JSON="$TMP_DIR/update.json"
+          ACTION_JSON="$TMP_DIR/action.json"
+          RESPONSE_JSON="$TMP_DIR/response.json"
+          DEPLOYMENTS_JSON="$TMP_DIR/deployments.json"
+
+          export DOKPLOY_COMPOSE_ID DOKPLOY_COMPOSE_NAME REMOTE_COMPOSE SERVER_ENV_FILE UPDATE_JSON ACTION_JSON
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["REMOTE_COMPOSE"], encoding="utf-8") as f:
+              compose = f.read()
+
+          with open(os.environ["SERVER_ENV_FILE"], encoding="utf-8-sig") as f:
+              env = f.read()
+
+          with open(os.environ["UPDATE_JSON"], "w", encoding="utf-8") as f:
+              json.dump({
+                  "composeId": os.environ["DOKPLOY_COMPOSE_ID"],
+                  "sourceType": "raw",
+                  "composeType": "docker-compose",
+                  "composeFile": compose,
+                  "composePath": "./docker-compose.yml",
+                  "env": env,
+                  "autoDeploy": False,
+                  "createEnvFile": True,
+              }, f)
+
+          with open(os.environ["ACTION_JSON"], "w", encoding="utf-8") as f:
+              json.dump({
+                  "composeId": os.environ["DOKPLOY_COMPOSE_ID"],
+                  "title": "GitHub Actions deployment",
+                  "description": f"Deploy {os.environ['DOKPLOY_COMPOSE_NAME']} using prebuilt images",
+              }, f)
+          PY
+
+          echo "Updating Dokploy Compose configuration..."
+          api_post compose.update "$UPDATE_JSON" "$RESPONSE_JSON"
+
+          echo "Validating Compose through Dokploy..."
+          api_get compose.getConvertedCompose "$RESPONSE_JSON" \
+            --data-urlencode "composeId=${DOKPLOY_COMPOSE_ID}"
+
+          echo "Checking deployment history..."
+          api_get deployment.allByCompose "$DEPLOYMENTS_JSON" \
+            --data-urlencode "composeId=${DOKPLOY_COMPOSE_ID}"
+
+          BEFORE_DATA=$(python3 - "$DEPLOYMENTS_JSON" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as f:
+              value = json.load(f)
+
+          if isinstance(value, list):
+              items = value
+          elif isinstance(value, dict):
+              items = next((value[k] for k in ("deployments", "data", "items", "results") if isinstance(value.get(k), list)), [])
+          else:
+              items = []
+
+          def ident(item):
+              return str(item.get("deploymentId") or item.get("id") or "")
+
+          def status(item):
+              return str(item.get("status") or item.get("deploymentStatus") or item.get("state") or "unknown").lower()
+
+          success = {"done", "success", "successful", "completed"}
+          ids = [ident(item) for item in items if ident(item)]
+          has_success = any(status(item) in success for item in items)
+
+          print(("compose.redeploy" if has_success else "compose.deploy") + "|" + ",".join(ids))
+          PY
+          )
+
+          DEPLOY_ACTION="${BEFORE_DATA%%|*}"
+          BEFORE_IDS="${BEFORE_DATA#*|}"
+
+          echo "Triggering $DEPLOY_ACTION"
+          api_post "$DEPLOY_ACTION" "$ACTION_JSON" "$RESPONSE_JSON"
+
+          echo "Waiting for a new Dokploy deployment record..."
+          NEW_DEPLOYMENT_ID=""
+
+          for attempt in $(seq 1 30); do
+            sleep 4
+
+            api_get deployment.allByCompose "$DEPLOYMENTS_JSON" \
+              --data-urlencode "composeId=${DOKPLOY_COMPOSE_ID}"
+
+            NEW_DEPLOYMENT_ID=$(python3 - "$DEPLOYMENTS_JSON" "$BEFORE_IDS" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as f:
+              value = json.load(f)
+
+          excluded = {x for x in sys.argv[2].split(",") if x}
+
+          if isinstance(value, list):
+              items = value
+          elif isinstance(value, dict):
+              items = next((value[k] for k in ("deployments", "data", "items", "results") if isinstance(value.get(k), list)), [])
+          else:
+              items = []
+
+          def ident(item):
+              return str(item.get("deploymentId") or item.get("id") or "")
+
+          candidates = [item for item in items if ident(item) and ident(item) not in excluded]
+          if not candidates:
+              print("")
+          else:
+              latest = max(candidates, key=lambda item: str(item.get("createdAt") or item.get("updatedAt") or ""))
+              print(ident(latest))
+          PY
+            )
+
+            if [ -n "$NEW_DEPLOYMENT_ID" ]; then
+              echo "Deployment ID: $NEW_DEPLOYMENT_ID"
+              break
+            fi
+
+            echo "Deployment record check ${attempt}/30"
+          done
+
+          if [ -z "$NEW_DEPLOYMENT_ID" ]; then
+            echo "Dokploy did not create a new deployment record."
+            exit 1
+          fi
+
+          echo "Waiting for deployment $NEW_DEPLOYMENT_ID to finish..."
+          FINAL_STATUS=unknown
+
+          for attempt in $(seq 1 240); do
+            sleep 5
+
+            api_get deployment.allByCompose "$DEPLOYMENTS_JSON" \
+              --data-urlencode "composeId=${DOKPLOY_COMPOSE_ID}"
+
+            FINAL_STATUS=$(python3 - "$DEPLOYMENTS_JSON" "$NEW_DEPLOYMENT_ID" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as f:
+              value = json.load(f)
+
+          target = sys.argv[2]
+
+          if isinstance(value, list):
+              items = value
+          elif isinstance(value, dict):
+              items = next((value[k] for k in ("deployments", "data", "items", "results") if isinstance(value.get(k), list)), [])
+          else:
+              items = []
+
+          def ident(item):
+              return str(item.get("deploymentId") or item.get("id") or "")
+
+          match = next((item for item in items if ident(item) == target), None)
+          if match is None:
+              print("missing")
+          else:
+              print(str(match.get("status") or match.get("deploymentStatus") or match.get("state") or "unknown").lower())
+          PY
+            )
+
+            echo "Deployment status ${attempt}/240: $FINAL_STATUS"
+
+            case "$FINAL_STATUS" in
+              done|success|successful|completed)
+                privileged rm -rf "$OLD_SOURCE"
+                echo "Dokploy deployment completed successfully."
+                exit 0
+                ;;
+              error|failed|failure|cancelled|canceled)
+                echo "Dokploy deployment failed. Restoring previous source directory."
+                if privileged test -d "$OLD_SOURCE"; then
+                  privileged rm -rf "$SERVER_SOURCE_DIR"
+                  privileged mv "$OLD_SOURCE" "$SERVER_SOURCE_DIR"
+                fi
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Dokploy deployment timed out. Last status: $FINAL_STATUS"
+          exit 1
+          REMOTE
+
+      - name: Verify public health endpoint
+        if: env.HEALTHCHECK_URL != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --max-time 15 \
+              "$HEALTHCHECK_URL" >/dev/null; then
+              echo "Health check passed: $HEALTHCHECK_URL"
+              exit 0
+            fi
+
+            echo "Health check attempt ${attempt}/30 failed."
+            sleep 10
+          done
+
+          echo "Health check failed."
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## Dokploy Compose deployment completed"
+            echo
+            echo "- Repository: \`${GITHUB_REPOSITORY}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Compose file: \`${COMPOSE_FILE}\`"
+            echo "- Compose ID: \`${DOKPLOY_COMPOSE_ID}\`"
+            echo "- Image build: \`GitHub Actions\`"
+            echo "- Image delivery: \`SSH -> docker load\`"
+            echo "- Compose provider: \`Raw, image-only\`"
+            echo "- Deployment controller: \`Dokploy Compose API\`"
+            echo "- Dokploy API: \`${DOKPLOY_URL}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

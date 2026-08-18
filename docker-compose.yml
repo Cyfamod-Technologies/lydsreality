@@ -1,55 +1,79 @@
 services:
-    laravel.test:
-        build:
-            context: './vendor/laravel/sail/runtimes/8.2'
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: 'sail-8.2/app'
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        ports:
-            - '${APP_PORT:-80}:80'
-            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
-        environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
-            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
-            IGNITION_LOCAL_SITES_PATH: '${PWD}'
-        volumes:
-            - '.:/var/www/html'
-        networks:
-            - sail
-        depends_on:
-            - mysql
-    mysql:
-        image: 'mysql/mysql-server:8.0'
-        ports:
-            - '${FORWARD_DB_PORT:-3306}:3306'
-        environment:
-            MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
-            MYSQL_ROOT_HOST: '%'
-            MYSQL_DATABASE: '${DB_DATABASE}'
-            MYSQL_USER: '${DB_USERNAME}'
-            MYSQL_PASSWORD: '${DB_PASSWORD}'
-            MYSQL_ALLOW_EMPTY_PASSWORD: 1
-        volumes:
-            - 'sail-mysql:/var/lib/mysql'
-            - './vendor/laravel/sail/database/mysql/create-testing-database.sh:/docker-entrypoint-initdb.d/10-create-testing-database.sh'
-        networks:
-            - sail
-        healthcheck:
-            test:
-                - CMD
-                - mysqladmin
-                - ping
-                - '-p${DB_PASSWORD}'
-            retries: 3
-            timeout: 5s
-networks:
-    sail:
-        driver: bridge
+  app:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_NAME: ${APP_NAME:-LydsReality}
+      APP_ENV: ${APP_ENV:-production}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_URL: ${APP_URL:-http://localhost}
+      APP_KEY: ${APP_KEY:?APP_KEY is required}
+      LOG_CHANNEL: ${LOG_CHANNEL:-daily}
+      BROADCAST_DRIVER: ${BROADCAST_DRIVER:-log}
+      CACHE_STORE: ${CACHE_STORE:-file}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-sync}
+      SESSION_DRIVER: ${SESSION_DRIVER:-file}
+      SESSION_LIFETIME: ${SESSION_LIFETIME:-120}
+      SESSION_HTTP_ONLY: ${SESSION_HTTP_ONLY:-true}
+      SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
+      ENABLE_HTTP_SECURITY_HEADERS: ${ENABLE_HTTP_SECURITY_HEADERS:-true}
+      FORCE_SCHEMA: ${FORCE_SCHEMA:-}
+      FORCE_ROOT_URL: ${FORCE_ROOT_URL:-}
+      DB_CONNECTION: mysql
+      DB_HOST: database
+      DB_PORT: "3306"
+      DB_DATABASE: ${DB_DATABASE:?DB_DATABASE is required}
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_STRICT: ${DB_STRICT:-false}
+      ADMIN_DIR: ${ADMIN_DIR:-admin}
+      CMS_ENABLE_INSTALLER: ${CMS_ENABLE_INSTALLER:-false}
+      CMS_HIDE_ACTIVATED_LICENSE_INFO: ${CMS_HIDE_ACTIVATED_LICENSE_INFO:-true}
+      SSH_HOST: ""
+      SSH_USER: ""
+      SSH_PORT: ""
+      SSH_PASSWORD: ""
+    ports:
+      - "${APP_PORT:-8080}:80"
+    expose:
+      - "80"
+    volumes:
+      - app_storage:/var/www/html/storage
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  database:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:?DB_DATABASE is required}
+      MYSQL_USER: ${DB_USERNAME:?DB_USERNAME is required}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - database_data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/001-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
 volumes:
-    sail-mysql:
-        driver: local
+  app_storage:
+    name: ${APP_STORAGE_VOLUME_NAME:-lydsreality_app_storage}
+  database_data:
+    name: ${DATABASE_VOLUME_NAME:-lydsreality_database_data}
