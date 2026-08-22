@@ -302,9 +302,22 @@ jobs:
           sudo apt-get install --yes openssh-client
 
           install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          ssh-keygen -y -P '' -f "$HOME/.ssh/deploy_key" >/dev/null
+          KEY_FILE="$HOME/.ssh/deploy_key"
+
+          if [[ "$SSH_PRIVATE_KEY" == *"PRIVATE KEY-----"* ]]; then
+            NORMALIZED_KEY="${SSH_PRIVATE_KEY//\\n/$'\n'}"
+            printf '%s\n' "$NORMALIZED_KEY" | tr -d '\r' > "$KEY_FILE"
+          elif ! printf '%s' "$SSH_PRIVATE_KEY" | base64 --decode > "$KEY_FILE" 2>/dev/null; then
+            echo "::error::SSH_PRIVATE_KEY must contain a private key or its base64 encoding."
+            exit 1
+          fi
+
+          chmod 600 "$KEY_FILE"
+
+          if ! ssh-keygen -y -P '' -f "$KEY_FILE" >/dev/null 2>&1; then
+            echo "::error::SSH_PRIVATE_KEY is invalid or passphrase-protected. Store the complete unencrypted private key, not the .pub key."
+            exit 1
+          fi
 
           ssh-keyscan \
             -T 15 \
