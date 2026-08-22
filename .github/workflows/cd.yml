@@ -24,6 +24,12 @@ env:
   SSH_PORT: ${{ vars.SSH_PORT || '22' }}
   TARGET_PLATFORM: ${{ vars.TARGET_PLATFORM || 'linux/amd64' }}
   HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
+  # Used only while GitHub Actions validates/builds the Compose project.
+  # Dokploy receives the real values from SERVER_ENV_FILE during deployment.
+  APP_KEY: compose-validation-only
+  DB_DATABASE: compose_validation
+  DB_USERNAME: compose_validation
+  DB_PASSWORD: compose-validation-only
 
 jobs:
   validate:
