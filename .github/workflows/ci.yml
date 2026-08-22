@@ -14,66 +14,211 @@ concurrency:
 jobs:
   tests:
     name: Laravel Tests
+
+    # Uses your self-hosted runner if RUNNER_OS is configured.
+    # Otherwise falls back to GitHub-hosted Ubuntu.
     runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
-    timeout-minutes: 15
+
+    timeout-minutes: 20
 
     env:
       APP_ENV: testing
       DB_CONNECTION: sqlite
       DB_DATABASE: database/database.sqlite
+      COMPOSER_NO_INTERACTION: 1
 
     steps:
+      # --------------------------------------------------
+      # 1. Checkout source code
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # 2. Install Linux dependencies
+      # --------------------------------------------------
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -e
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            software-properties-common \
+            ca-certificates \
+            curl \
+            git \
+            unzip \
+            zip \
+            sqlite3 \
+            libsqlite3-dev \
+            libzip-dev \
+            libpng-dev \
+            libjpeg-dev \
+            libfreetype6-dev \
+            libxml2-dev
+
+      # --------------------------------------------------
+      # 3. Configure PHP
+      # --------------------------------------------------
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: curl, gd, pdo_sqlite, zip
+
+          extensions: >
+            bcmath,
+            ctype,
+            curl,
+            dom,
+            fileinfo,
+            gd,
+            intl,
+            mbstring,
+            openssl,
+            pcntl,
+            pdo,
+            pdo_sqlite,
+            tokenizer,
+            xml,
+            xmlreader,
+            xmlwriter,
+            zip
+
           coverage: none
           tools: composer:v2
-        env:
-          runner: ${{ runner.environment }}
 
+        env:
+          runner: self-hosted
+
+      # --------------------------------------------------
+      # 4. Verify PHP environment
+      # --------------------------------------------------
       - name: Validate PHP toolchain
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "PHP Version:"
+          php -v
+
+          echo ""
+          echo "Composer Version:"
+          composer --version
+
+          echo ""
+          echo "PHP Extensions:"
+          php -m
+
           php -r '
-            if (version_compare(PHP_VERSION, "8.2.0", "<") || version_compare(PHP_VERSION, "9.0.0", ">=")) {
-                fwrite(STDERR, "PHP 8.2 or newer (but below PHP 9) is required; found " . PHP_VERSION . PHP_EOL);
+            if (
+                version_compare(PHP_VERSION, "8.2.0", "<") ||
+                version_compare(PHP_VERSION, "9.0.0", ">=")
+            ) {
+                fwrite(
+                    STDERR,
+                    "PHP 8.2+ but below PHP 9 is required. Found: " .
+                    PHP_VERSION .
+                    PHP_EOL
+                );
+
                 exit(1);
             }
 
-            foreach (["curl", "gd", "pdo_sqlite", "zip"] as $extension) {
+            $required = [
+                "curl",
+                "dom",
+                "fileinfo",
+                "gd",
+                "mbstring",
+                "openssl",
+                "pdo",
+                "pdo_sqlite",
+                "xml",
+                "zip"
+            ];
+
+            foreach ($required as $extension) {
                 if (! extension_loaded($extension)) {
-                    fwrite(STDERR, "Missing PHP extension: {$extension}" . PHP_EOL);
+                    fwrite(
+                        STDERR,
+                        "Missing PHP extension: {$extension}" .
+                        PHP_EOL
+                    );
+
                     exit(1);
                 }
             }
 
-            echo "Using PHP " . PHP_VERSION . PHP_EOL;
+            echo "PHP environment OK" . PHP_EOL;
           '
-          composer --version
+
+      # --------------------------------------------------
+      # 5. Cache Composer dependencies
+      # --------------------------------------------------
+      - name: Get Composer cache directory
+        id: composer-cache
+        shell: bash
+        run: |
+          echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Composer packages
         uses: actions/cache@v4
         with:
-          path: vendor
-          key: ${{ runner.os }}-php-${{ hashFiles('composer.lock') }}
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php83-composer-${{ hashFiles('composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-php-
+            ${{ runner.os }}-php83-composer-
 
+      # --------------------------------------------------
+      # 6. Install Laravel dependencies
+      # --------------------------------------------------
       - name: Install Composer dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-
-      - name: Prepare Laravel
         run: |
+          composer install \
+            --prefer-dist \
+            --no-progress \
+            --no-interaction \
+            --optimize-autoloader
+
+      # --------------------------------------------------
+      # 7. Prepare Laravel environment
+      # --------------------------------------------------
+      - name: Prepare Laravel
+        shell: bash
+        run: |
+          set -e
+
           cp .env.example .env
+
+          mkdir -p database
           touch database/database.sqlite
+
           php artisan key:generate
 
-      - name: Run tests
-        run: vendor/bin/phpunit
+          chmod -R 775 storage bootstrap/cache
+
+      # --------------------------------------------------
+      # 8. Clear Laravel caches
+      # --------------------------------------------------
+      - name: Clear Laravel caches
+        run: |
+          php artisan config:clear
+          php artisan cache:clear
+          php artisan route:clear
+          php artisan view:clear
+
+      # --------------------------------------------------
+      # 9. Run migrations
+      # --------------------------------------------------
+      - name: Run database migrations
+        run: |
+          php artisan migrate --force
+
+      # --------------------------------------------------
+      # 10. Run tests
+      # --------------------------------------------------
+      - name: Run Laravel tests
+        run: |
+          php artisan test
