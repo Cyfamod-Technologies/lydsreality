@@ -84,13 +84,13 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: |
           set -euo pipefail
           : "${SSH_HOST:?SSH_HOST secret is missing}"
           : "${SSH_USER:?SSH_USER secret is missing}"
-          : "${SSH_PASSWORD:?SSH_PASSWORD secret is missing}"
+          : "${SSH_PRIVATE_KEY:?SSH_PRIVATE_KEY secret is missing}"
           : "${DOKPLOY_API_KEY:?DOKPLOY_API_KEY secret is missing}"
 
       - name: Prepare release metadata
@@ -288,12 +288,17 @@ jobs:
         shell: bash
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes openssh-client sshpass
+          sudo apt-get install --yes openssh-client
 
           install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          ssh-keygen -y -P '' -f "$HOME/.ssh/deploy_key" >/dev/null
+
           ssh-keyscan \
             -T 15 \
             -p "$SSH_PORT" \
@@ -306,7 +311,6 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
         run: |
           set -euo pipefail
           mapfile -t IMAGES < "$IMAGES_FILE"
@@ -318,8 +322,11 @@ jobs:
 
           docker save "${IMAGES[@]}" | \
             gzip -1 | \
-            sshpass -e ssh \
+            ssh \
+              -i "$HOME/.ssh/deploy_key" \
               -p "$SSH_PORT" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=15 \
               -o ServerAliveInterval=15 \
@@ -332,7 +339,6 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -342,14 +348,20 @@ jobs:
           echo "REMOTE_SOURCE=$REMOTE_SOURCE" >> "$GITHUB_ENV"
           echo "REMOTE_COMPOSE=$REMOTE_COMPOSE" >> "$GITHUB_ENV"
 
-          sshpass -e scp \
+          scp \
+            -i "$HOME/.ssh/deploy_key" \
             -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$SOURCE_ARCHIVE" \
             "$SSH_USER@$SSH_HOST:$REMOTE_SOURCE"
 
-          sshpass -e scp \
+          scp \
+            -i "$HOME/.ssh/deploy_key" \
             -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$DEPLOY_COMPOSE" \
             "$SSH_USER@$SSH_HOST:$REMOTE_COMPOSE"
@@ -359,7 +371,6 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: |
           set -euo pipefail
@@ -367,8 +378,11 @@ jobs:
           API_KEY_B64=$(printf '%s' "$DOKPLOY_API_KEY" | base64 | tr -d '\n')
           echo "::add-mask::$API_KEY_B64"
 
-          sshpass -e ssh \
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
             -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=15 \
             -o ServerAliveInterval=10 \
