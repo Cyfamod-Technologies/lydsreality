@@ -26,12 +26,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up PHP
+      - name: Set up PHP on GitHub-hosted runner
+        if: runner.environment == 'github-hosted'
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
           extensions: curl, gd, pdo_sqlite, zip
           coverage: none
+
+      - name: Validate PHP toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          php -r '
+            if (version_compare(PHP_VERSION, "8.2.0", "<") || version_compare(PHP_VERSION, "9.0.0", ">=")) {
+                fwrite(STDERR, "PHP 8.2 or newer (but below PHP 9) is required; found " . PHP_VERSION . PHP_EOL);
+                exit(1);
+            }
+
+            foreach (["curl", "gd", "pdo_sqlite", "zip"] as $extension) {
+                if (! extension_loaded($extension)) {
+                    fwrite(STDERR, "Missing PHP extension: {$extension}" . PHP_EOL);
+                    exit(1);
+                }
+            }
+
+            echo "Using PHP " . PHP_VERSION . PHP_EOL;
+          '
+          composer --version
 
       - name: Cache Composer packages
         uses: actions/cache@v4
