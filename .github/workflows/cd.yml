@@ -258,6 +258,7 @@ jobs:
           fi
 
           docker compose \
+            --project-directory "$GITHUB_WORKSPACE" \
             --file "$BUILD_COMPOSE" \
             build \
             --pull \
