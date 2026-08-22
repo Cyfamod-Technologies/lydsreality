@@ -10,7 +10,24 @@ COPY webpack.mix.js ./
 COPY public ./public
 COPY resources ./resources
 
-RUN npm install --ignore-scripts --no-audit --no-fund \
+RUN set -eux; \
+    for asset_type in core packages plugins; do \
+        for source_dir in platform/$asset_type/*/public; do \
+            [ -d "$source_dir" ] || continue; \
+            module_name="$(basename "$(dirname "$source_dir")")"; \
+            target_dir="public/vendor/core/$asset_type/$module_name"; \
+            mkdir -p "$target_dir"; \
+            cp -a "$source_dir/." "$target_dir/"; \
+        done; \
+    done; \
+    for source_dir in platform/themes/*/public; do \
+        [ -d "$source_dir" ] || continue; \
+        theme_name="$(basename "$(dirname "$source_dir")")"; \
+        target_dir="public/themes/$theme_name"; \
+        mkdir -p "$target_dir"; \
+        cp -a "$source_dir/." "$target_dir/"; \
+    done; \
+    npm install --ignore-scripts --no-audit --no-fund \
     && npm run production
 
 FROM php:8.3-apache-bookworm
