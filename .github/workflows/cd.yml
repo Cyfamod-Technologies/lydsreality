@@ -1,69 +1,35 @@
 name: Deploy Docker Compose Through Dokploy
 
 on:
-  push:
-    branches: [main]
-
-  workflow_dispatch:
-    inputs:
-      compose_file:
-        description: Compose file path relative to repository root
-        required: false
-        default: docker-compose.yml
-        type: string
-      compose_id:
-        description: Dokploy Compose ID
-        required: false
-        type: string
-      healthcheck_url:
-        description: Optional public healthcheck URL
-        required: false
-        type: string
-
-  workflow_call:
-    inputs:
-      compose_file:
-        required: false
-        default: docker-compose.yml
-        type: string
-      compose_id:
-        required: false
-        type: string
-      healthcheck_url:
-        required: false
-        type: string
-    secrets:
-      SSH_HOST:
-        required: true
-      SSH_USER:
-        required: true
-      SSH_PASSWORD:
-        required: true
-      DOKPLOY_API_KEY:
-        required: true
+  pull_request:
+    branches:
+      - dev
+    types:
+      - closed
 
 concurrency:
-  group: dokploy-compose-${{ github.repository }}-${{ github.ref }}
+  group: dokploy-compose-${{ github.repository }}-dev
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  COMPOSE_FILE: ${{ inputs.compose_file || vars.COMPOSE_FILE || 'docker-compose.yml' }}
-  DOKPLOY_COMPOSE_ID: ${{ inputs.compose_id || vars.DOKPLOY_COMPOSE_ID }}
+  COMPOSE_FILE: ${{ vars.COMPOSE_FILE || 'docker-compose.yml' }}
+  DOKPLOY_COMPOSE_ID: ${{ vars.DOKPLOY_COMPOSE_ID }}
   DOKPLOY_COMPOSE_NAME: ${{ vars.DOKPLOY_COMPOSE_NAME || github.event.repository.name }}
   SERVER_SOURCE_DIR: ${{ vars.SERVER_SOURCE_DIR }}
   SERVER_ENV_FILE: ${{ vars.SERVER_ENV_FILE }}
   DOKPLOY_URL: http://127.0.0.1:5000
   SSH_PORT: ${{ vars.SSH_PORT || '22' }}
   TARGET_PLATFORM: ${{ vars.TARGET_PLATFORM || 'linux/amd64' }}
-  HEALTHCHECK_URL: ${{ inputs.healthcheck_url || vars.HEALTHCHECK_URL }}
+  HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
 
 jobs:
   validate:
     name: Validate Compose Project
-    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
     timeout-minutes: 10
 
     steps:
@@ -101,7 +67,8 @@ jobs:
 
   deploy:
     name: Build And Deploy Through Dokploy
-    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
     needs: validate
     timeout-minutes: 45
 
@@ -132,7 +99,7 @@ jobs:
           set -euo pipefail
 
           SHORT_SHA="${GITHUB_SHA::7}"
-          IMAGE_TAG="main-${SHORT_SHA}"
+          IMAGE_TAG="dev-${SHORT_SHA}"
 
           REPO_SLUG=$(printf '%s' "$GITHUB_REPOSITORY" | \
             tr '[:upper:]' '[:lower:]' | \

@@ -53,6 +53,7 @@ storage/framework/laravel-excel/
 /.scribe
 /.env.testing
 .phpactor.json
+.env
 
 storage/framework/maintenance.php
 
