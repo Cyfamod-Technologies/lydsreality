@@ -298,8 +298,13 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes openssh-client
+
+          for command_name in ssh scp ssh-keyscan ssh-keygen; do
+            command -v "$command_name" >/dev/null || {
+              echo "::error::$command_name is required on the selected runner."
+              exit 1
+            }
+          done
 
           install -d -m 700 "$HOME/.ssh"
           KEY_FILE="$HOME/.ssh/deploy_key"
