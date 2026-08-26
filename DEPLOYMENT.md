@@ -16,6 +16,11 @@ The workflow:
 Dokploy never receives a Compose `build` directive and does not build the
 application image.
 
+CI is also containerized. GitHub builds `infra/Dockerfile.ci`, which installs
+the test-only PHP extensions and Composer development dependencies, prepares a
+temporary SQLite database, runs migrations, and executes the Laravel test
+suite during the image build. The CI image is never pushed or deployed.
+
 ## Deployment files
 
 - `.github/workflows/cd.yml` only defines the job order and GitHub Actions.

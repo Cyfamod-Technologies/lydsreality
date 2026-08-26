@@ -17,143 +17,23 @@ concurrency:
 
 jobs:
   tests:
-    name: Laravel Tests
-
+    name: Laravel Tests In Docker
     runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
-
-    # But the job executes inside PHP 8.3
-    container:
-      image: php:8.3-cli-bookworm
-
-    timeout-minutes: 20
-
-    env:
-      APP_ENV: testing
-      DB_CONNECTION: sqlite
-      DB_DATABASE: database/database.sqlite
-      COMPOSER_NO_INTERACTION: 1
+    timeout-minutes: 30
 
     steps:
-
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # --------------------------------------------------
-      # Install Linux dependencies inside container
-      # --------------------------------------------------
-      - name: Install system dependencies
-        run: |
-          apt-get update
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          apt-get install -y \
-            git \
-            curl \
-            unzip \
-            zip \
-            sqlite3 \
-            libsqlite3-dev \
-            libcurl4-openssl-dev \
-            libpng-dev \
-            libjpeg62-turbo-dev \
-            libfreetype6-dev \
-            libicu-dev \
-            libonig-dev \
-            libxml2-dev \
-            libzip-dev
-
-      # --------------------------------------------------
-      # Install PHP extensions
-      # --------------------------------------------------
-      - name: Install PHP extensions
-        run: |
-          docker-php-ext-configure gd \
-            --with-freetype \
-            --with-jpeg
-
-          docker-php-ext-install -j$(nproc) \
-            bcmath \
-            curl \
-            dom \
-            gd \
-            intl \
-            mbstring \
-            pdo_sqlite \
-            xml \
-            xmlreader \
-            xmlwriter \
-            zip
-
-      # --------------------------------------------------
-      # Verify PHP
-      # --------------------------------------------------
-      - name: Verify PHP environment
-        run: |
-          php -v
-          php -m
-
-      # --------------------------------------------------
-      # Install Composer
-      # --------------------------------------------------
-      - name: Install Composer
-        run: |
-          curl -sS https://getcomposer.org/installer -o composer-setup.php
-
-          php composer-setup.php \
-            --install-dir=/usr/local/bin \
-            --filename=composer
-
-          rm composer-setup.php
-
-          composer --version
-
-      # --------------------------------------------------
-      # Install Laravel dependencies
-      # --------------------------------------------------
-      - name: Install Composer dependencies
-        run: |
-          composer install \
-            --no-interaction \
-            --prefer-dist \
-            --no-progress
-
-      # --------------------------------------------------
-      # Prepare Laravel
-      # --------------------------------------------------
-      - name: Prepare Laravel
-        run: |
-          cp .env.example .env
-
-          mkdir -p database
-          touch database/database.sqlite
-
-          mkdir -p storage/framework/cache
-          mkdir -p storage/framework/sessions
-          mkdir -p storage/framework/views
-          mkdir -p bootstrap/cache
-
-          chmod -R 775 storage bootstrap/cache
-
-          php artisan key:generate
-
-      # --------------------------------------------------
-      # Clear Laravel caches
-      # --------------------------------------------------
-      - name: Clear Laravel caches
-        run: |
-          php artisan config:clear
-          php artisan route:clear
-          php artisan view:clear
-
-      # --------------------------------------------------
-      # Migrate database
-      # --------------------------------------------------
-      - name: Run migrations
-        run: |
-          php artisan migrate --force
-
-      # --------------------------------------------------
-      # Tests
-      # --------------------------------------------------
-      - name: Run tests
-        run: |
-          php artisan test
+      - name: Build CI image and run Laravel tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.ci
+          push: false
+          tags: lydsreality-ci:${{ github.sha }}
+          cache-from: type=gha,scope=lydsreality-ci
+          cache-to: type=gha,mode=max,scope=lydsreality-ci
