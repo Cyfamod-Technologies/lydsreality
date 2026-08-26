@@ -64,3 +64,4 @@ storage/framework/maintenance.php
 AGENTS.md
 plans/templates/
 release-manifest.json
+connect.sh

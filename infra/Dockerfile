@@ -1,3 +1,5 @@
+FROM docker.io/library/composer:2 AS composer
+
 FROM node:22-bookworm-slim AS frontend
 
 WORKDIR /app
@@ -60,7 +62,7 @@ RUN apt-get update \
 
 WORKDIR /var/www/html
 
-COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 COPY --chown=www-data:www-data . .
 
 RUN composer install \

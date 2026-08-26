@@ -1,7 +1,12 @@
 name: CI
 
 on:
+  pull_request:
+    branches:
+      - dev
+      - main
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -14,8 +19,7 @@ jobs:
   tests:
     name: Laravel Tests
 
-    # Runs on YOUR organization runner
-    runs-on: self-hosted
+    runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
 
     # But the job executes inside PHP 8.3
     container:
