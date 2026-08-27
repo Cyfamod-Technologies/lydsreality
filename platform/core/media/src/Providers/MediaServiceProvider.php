@@ -160,6 +160,7 @@ class MediaServiceProvider extends ServiceProvider
                         'url' => $setting->get('media_aws_url', $config->get('filesystems.disks.s3.url')),
                         'endpoint' => $setting->get('media_aws_endpoint', $config->get('filesystems.disks.s3.endpoint')) ?: null,
                         'use_path_style_endpoint' => (bool) $setting->get('media_aws_use_path_style_endpoint', $config->get('filesystems.disks.s3.use_path_style_endpoint')),
+                        'acl' => $config->get('filesystems.disks.s3.options.ACL', 'bucket-owner-full-control'),
                     ]);
 
                     break;

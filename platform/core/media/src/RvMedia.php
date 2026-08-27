@@ -1293,6 +1293,9 @@ class RvMedia
                 'url' => $config['url'],
                 'endpoint' => $config['endpoint'],
                 'use_path_style_endpoint' => (bool) $config['use_path_style_endpoint'],
+                'options' => [
+                    'ACL' => $config['acl'] ?? 'bucket-owner-full-control',
+                ],
             ],
         ]);
     }

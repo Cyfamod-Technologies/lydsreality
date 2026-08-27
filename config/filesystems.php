@@ -56,6 +56,10 @@ return [
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'options' => [
+                // Compatible with S3 Object Ownership: Bucket owner enforced.
+                'ACL' => env('AWS_ACL', 'bucket-owner-full-control'),
+            ],
             'throw' => false,
             'report' => false,
         ],
