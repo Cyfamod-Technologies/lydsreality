@@ -10,29 +10,20 @@ ENV APP_ENV=testing \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
-        libcurl4-openssl-dev \
         libfreetype6-dev \
         libicu-dev \
         libjpeg62-turbo-dev \
         libonig-dev \
         libpng-dev \
         libsqlite3-dev \
-        libxml2-dev \
         libzip-dev \
         unzip \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j2 \
         bcmath \
-        curl \
-        dom \
+        calendar \
         gd \
         intl \
-        mbstring \
-        pcntl \
-        pdo_sqlite \
-        xml \
-        xmlreader \
-        xmlwriter \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
