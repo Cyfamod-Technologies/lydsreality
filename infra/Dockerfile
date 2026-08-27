@@ -68,6 +68,7 @@ WORKDIR /var/www/html
 
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 COPY --chown=www-data:www-data . .
+COPY --chown=www-data:www-data database.sql /var/www/html/database.sql
 
 RUN composer install \
     --no-dev \
