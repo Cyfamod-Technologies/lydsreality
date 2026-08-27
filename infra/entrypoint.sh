@@ -11,6 +11,7 @@ echo "======================================"
 # Create Laravel required directories
 
 mkdir -p \
+    storage/app/purifier \
     storage/framework/cache/data \
     storage/framework/sessions \
     storage/framework/views \
@@ -161,6 +162,12 @@ php artisan route:cache || true
 
 php artisan view:cache
 
+
+# Cache commands can recreate storage directories as root. Repair ownership
+# after they finish so Apache's www-data workers can write runtime caches.
+mkdir -p storage/app/purifier
+chown -R www-data:www-data storage bootstrap/cache
+chmod -R ug+rwX storage bootstrap/cache
 
 
 
