@@ -195,6 +195,14 @@ jobs:
           docker image inspect "$FULL_IMAGE" >/dev/null
           docker image inspect "$LATEST_IMAGE" >/dev/null
 
+          docker run \
+            --rm \
+            --entrypoint /bin/sh \
+            "$FULL_IMAGE" \
+            -c 'test -s /var/www/html/database.sql'
+
+          echo "Verified database.sql is present in the image."
+
           IMAGE_ARCHITECTURE=$(
             docker image inspect "$FULL_IMAGE" \
               --format '{{.Architecture}}'

@@ -54,14 +54,23 @@ fi
 
 # Import database.sql only when database is empty
 
-if [ -f "/var/www/html/database.sql" ]; then
+if [ -n "${DB_HOST:-}" ] && [ -f "/var/www/html/database.sql" ]; then
 
 
     echo "database.sql detected."
 
 
 
-    TABLE_COUNT=$(php artisan db:table --json 2>/dev/null | grep -o '"name"' | wc -l || true)
+    export MYSQL_PWD="${DB_PASSWORD:-}"
+
+    TABLE_COUNT=$(mysql \
+        --host="$DB_HOST" \
+        --port="${DB_PORT:-3306}" \
+        --user="${DB_USERNAME:-root}" \
+        --batch \
+        --skip-column-names \
+        "${DB_DATABASE:?DB_DATABASE is required}" \
+        --execute='SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE();')
 
 
 
@@ -73,7 +82,11 @@ if [ -f "/var/www/html/database.sql" ]; then
 
 
 
-        php artisan db:unprepared "$(cat /var/www/html/database.sql)"
+        mysql \
+            --host="$DB_HOST" \
+            --port="${DB_PORT:-3306}" \
+            --user="${DB_USERNAME:-root}" \
+            "$DB_DATABASE" < /var/www/html/database.sql
 
 
 
@@ -90,6 +103,13 @@ if [ -f "/var/www/html/database.sql" ]; then
 
     fi
 
+
+
+elif [ -z "${DB_HOST:-}" ]; then
+
+
+    echo "DB_HOST is not configured."
+    echo "Skipping database import."
 
 
 else
