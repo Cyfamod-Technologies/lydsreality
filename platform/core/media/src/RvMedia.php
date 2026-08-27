@@ -1260,6 +1260,12 @@ class RvMedia
 
     public function getMediaDriver(): string
     {
+        $configuredDriver = config('core.media.media.driver');
+
+        if ($configuredDriver) {
+            return $configuredDriver === 'local' ? 'public' : $configuredDriver;
+        }
+
         return setting('media_driver', 'public');
     }
 

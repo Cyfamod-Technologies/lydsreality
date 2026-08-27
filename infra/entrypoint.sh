@@ -8,6 +8,25 @@ echo "Starting Laravel application"
 echo "======================================"
 
 
+# Validate the optional deployment-level media storage override.
+
+case "${RV_MEDIA_DRIVER:-}" in
+    ""|local|public)
+        ;;
+    s3)
+        : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required when RV_MEDIA_DRIVER=s3}"
+        : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required when RV_MEDIA_DRIVER=s3}"
+        : "${AWS_DEFAULT_REGION:?AWS_DEFAULT_REGION is required when RV_MEDIA_DRIVER=s3}"
+        : "${AWS_BUCKET:?AWS_BUCKET is required when RV_MEDIA_DRIVER=s3}"
+        : "${AWS_URL:?AWS_URL is required when RV_MEDIA_DRIVER=s3}"
+        ;;
+    *)
+        echo "RV_MEDIA_DRIVER must be local, public, or s3."
+        exit 1
+        ;;
+esac
+
+
 # Create Laravel required directories
 
 mkdir -p \

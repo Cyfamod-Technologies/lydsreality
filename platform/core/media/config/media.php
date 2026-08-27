@@ -1,6 +1,9 @@
 <?php
 
 return [
+    // Set to "local" (the public disk) or "s3" to override the database setting.
+    // Leave empty to keep controlling the driver from Settings > Media.
+    'driver' => env('RV_MEDIA_DRIVER'),
     'sizes' => [
         'thumb' => '150x150',
     ],
