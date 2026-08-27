@@ -18,7 +18,7 @@ mkdir -p \
     bootstrap/cache
 
 
-# Fix permissions
+# Fix Laravel permissions
 
 chown -R www-data:www-data storage bootstrap/cache
 
@@ -28,63 +28,52 @@ echo "Checking database connection..."
 
 
 
-# Wait for MySQL to be ready
+# Wait until Laravel can connect to database
 
 if [ -n "${DB_HOST:-}" ]; then
 
-    until mysqladmin ping \
-        -h "$DB_HOST" \
-        -u "$DB_USERNAME" \
-        -p"$DB_PASSWORD" \
-        --silent
+    until php artisan db:show >/dev/null 2>&1
     do
         echo "Waiting for database server..."
         sleep 5
     done
 
 
-    echo "Database server is available."
+    echo "Database connection successful."
 
 else
 
-    echo "DB_HOST not configured. Skipping database check."
+    echo "DB_HOST is not configured."
+    echo "Skipping database connection check."
 
 fi
 
 
 
 
-# Import database.sql if database is empty
+
+# Import database.sql only when database is empty
 
 if [ -f "/var/www/html/database.sql" ]; then
 
 
-    echo "Found database.sql"
+    echo "database.sql detected."
 
 
 
-    TABLE_COUNT=$(mysql \
-        -h "$DB_HOST" \
-        -u "$DB_USERNAME" \
-        -p"$DB_PASSWORD" \
-        "$DB_DATABASE" \
-        -e "SHOW TABLES;" 2>/dev/null | wc -l || true)
+    TABLE_COUNT=$(php artisan db:table --json 2>/dev/null | grep -o '"name"' | wc -l || true)
 
 
 
-    if [ "$TABLE_COUNT" -le 1 ]; then
+    if [ "$TABLE_COUNT" -eq 0 ]; then
 
 
-        echo "Database is empty."
+        echo "Database appears empty."
         echo "Importing database.sql..."
 
 
 
-        mysql \
-            -h "$DB_HOST" \
-            -u "$DB_USERNAME" \
-            -p"$DB_PASSWORD" \
-            "$DB_DATABASE" < /var/www/html/database.sql
+        php artisan db:unprepared "$(cat /var/www/html/database.sql)"
 
 
 
@@ -96,7 +85,7 @@ if [ -f "/var/www/html/database.sql" ]; then
 
 
         echo "Database already contains tables."
-        echo "Skipping import."
+        echo "Skipping database import."
 
 
     fi
@@ -124,7 +113,7 @@ php artisan package:discover --ansi
 
 
 
-# Create storage link
+# Create storage symlink
 
 if [ ! -L public/storage ]; then
 
@@ -135,18 +124,23 @@ fi
 
 
 
-# Production cache
+# Clear old caches
 
 php artisan config:clear
 
 php artisan cache:clear
 
 
+
+
+# Build production caches
+
 php artisan config:cache
 
 php artisan route:cache || true
 
 php artisan view:cache
+
 
 
 
