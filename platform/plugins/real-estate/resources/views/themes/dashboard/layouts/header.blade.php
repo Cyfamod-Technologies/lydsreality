@@ -4,6 +4,15 @@
 
 <link href="{{ asset('vendor/core/plugins/real-estate/css/dashboard/style.css') }}" rel="stylesheet">
 
+<style>
+    @media screen and (max-width: 1199px) {
+        .header--mobile .header__center img {
+            max-height: 30px !important;
+            width: auto;
+        }
+    }
+</style>
+
 @if (session('locale_direction', 'ltr') == 'rtl')
     <link href="{{ asset('vendor/core/core/base/css/core.rtl.css') }}" rel="stylesheet">
     <link href="{{ asset('vendor/core/plugins/real-estate/css/dashboard/style-rtl.css') }}" rel="stylesheet">

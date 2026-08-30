@@ -1173,7 +1173,10 @@ a, a:hover, a:focus, a:active {
 }
 
 .header--mobile .header__center img {
-    max-height: 30px;
+    // The configured site logo height is rendered inline. Keep the dashboard
+    // toolbar compact on mobile without changing the logo anywhere else.
+    max-height: 30px !important;
+    width: auto;
 }
 
 .header--mobile .header__left {

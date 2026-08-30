@@ -452,7 +452,7 @@ class RealEstateServiceProvider extends ServiceProvider
                             'icon' => 'ti ti-credit-card',
                         ]);
                 })
-                ->when(RealEstateHelper::isEnabledConsultForm(), function (DashboardMenuSupport $dashboardMenu): void {
+                /* ->when(RealEstateHelper::isEnabledConsultForm(), function (DashboardMenuSupport $dashboardMenu): void {
                     $dashboardMenu
                         ->registerItem([
                             'id' => 'cms-account-consult',
@@ -481,7 +481,7 @@ class RealEstateServiceProvider extends ServiceProvider
                             'url' => fn () => route('public.account.invoices.index'),
                             'icon' => 'ti ti-receipt',
                         ]);
-                })
+                }) */
                 ->registerItem([
                     'id' => 'cms-account-settings',
                     'priority' => 5,
