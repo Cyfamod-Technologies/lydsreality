@@ -9,3 +9,6 @@ Media storage:
 - `RV_MEDIA_DRIVER=s3` uses Amazon S3 with the `AWS_*` variables documented in `.env.example`.
 - `AWS_ACL=bucket-owner-full-control` supports buckets with ACLs disabled.
 - Changing the driver does not migrate existing files between local storage and S3.
+
+
+<!-- Security scan triggered at 2026-08-31 18:22:34 -->
